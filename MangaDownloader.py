@@ -1,5 +1,20 @@
-#!/usr/bin/env python2.7
-# -*- coding: cp1252 -*-
+#!/usr/bin/env python3
+from getpass import getpass
+import shutil
+import sys
+from time import sleep
+from itertools import cycle
+import re
+from bs4 import BeautifulSoup
+import os
+import json
+import argparse
+import urllib.request
+import urllib.error
+from zipfile import *
+import cfscrape
+from http.cookiejar import LWPCookieJar
+
 about='''
 Crunchyroll MangaDownloader v0.3.2.4 (Crunchymanga v0.3.2.4 for short).
 All credit goes to Miguel A(Touman).
@@ -11,92 +26,127 @@ Beautifulsoup and cfscrape (with its dependencies) are the only external librari
 
 https://github.com/7ouma/CrunchyManga
 '''
-from getpass import getpass
-import shutil
-import sys
-from time import sleep
-from itertools import izip, cycle
-import re
-from BeautifulSoup import BeautifulSoup
-import urllib2
-import os
-from urlparse import urlparse
-import json
-import cookielib
-import urllib
-from os import path
-import argparse
-from zipfile import *
-import cfscrape
-from cookielib import LWPCookieJar
 
-class MangaDownloader():
 
+def xor_crypt(data, key):
+    """
+    Simple XOR encryption algorithm. XOR encryption is reversible
+    :param data: Data to crypt/decrypt
+    :param key: The key
+    :return: encrypted/decrypted data
+    """
+    return ''.join(chr(ord(char) ^ ord(key)) for (char, key) in zip(data, cycle(key)))
+
+
+def zipdir(path, zip):
+    for root, dirs, files in os.walk(path):
+        for file in files:
+            zip.write(os.path.join(root, file))
+
+
+class Manga:
     def __init__(self):
-        self.directorio = os.getcwd()
-        self.read_config()
+        self.title = ""
+        self.url = ""
+        self.volume = "0"
+
+
+class Config:
+    def __init__(self):
+        self.dir = "Manga"
+        self.zip = False
+        self.d_volumes = True
+        self.overwrite = False
+        self.delete_files = True
+        self.json = None
+
+    def write(self):
+        f = open("config.json", 'wb')
+        f.write(self.json)
+        f.close()
+
+    def read(self):
+        try:
+            with open("config.json") as config_file:
+                self.json = json.load(config_file)
+                if self.json["dir"]:
+                    self.dir = self.json["dir"]
+                if self.json["zip"]:
+                    self.zip = self.json["zip"]
+                if self.json["download_volumes"]:
+                    self.d_volumes = self.json["download_volumes"]
+                if self.json["overwrite_folders"]:
+                    self.overwrite = self.json["overwrite_folders"]
+                if self.json["delete_files_after_zip"]:
+                    self.delete_files = self.json["delete_files_after_zip"]
+
+        except (OSError, IOError):
+            print("Error: {err}".format(err=e))
+
+
+class MangaDownloader:
+    def __init__(self):
+        self.folder = os.getcwd()
+        self.config = Config()
         self.scraper = cfscrape.create_scraper()
         self.UserAgent = "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/52.0.2743.116 Safari/537.36"
 
+        self.config.read();
 
-    def xord(self,bytear, key):
-        return ''.join(chr(ord(x) ^ ord(y)) for (x,y) in izip(bytear, cycle(key)))
+    def zip_folder(self, manga):
+        previous_folder = os.curdir
 
-
-    def zipmanga(self):
-        if self.manga_vol == "0":
-            filename = self.filename
+        if manga.volume == "0":
+            filename = manga.filename
         else:
-            filename = self.filevol
-        os.chdir(self.filedir)
-        def zipdir(path, zip):
-            for root, dirs, files in os.walk(path):
-                for file in files:
-                    zip.write(os.path.join(root, file))
-        print "\nCreating %s.zip\n"%(filename)
-        zip_archive = ZipFile(filename+".zip", "w")
-        zipdir(filename,zip_archive)
-        zip_archive.close()
-        os.chdir(self.directorio)
-        if self.delete_files:
-            try: 
-                shutil.rmtree(self.filedir+"\\"+filename)
-            except:
-                shutil.rmtree(self.filedir+"/"+filename)
+            filename = manga.filevol
 
-                
-    def downloadPages( self, pages ):     
-        i = 0
-        try:
-            while i < len( pages ):
-                sys.stdout.write('\rPage %d of %d' %( i+1, len( pages ) ) ) 
-                sys.stdout.flush()
-                descarga = self.DownloadImages( pages[i] )
-                if descarga is not None:
-                    if (i+1) <= 9:
-                            image = "00" + str(i+1) + ".jpg"
-                    elif (i+1) <= 99:
-                            image = "0" + str(i+1) + ".jpg"
-                    else:
-                            image = str(i+1) + ".jpg"
-                    f = open( image, 'wb' )
-                    f.write( self.xord( descarga, 'B' ) )
-                    f.close()
-                    i+=1
+        os.chdir(self.filedir)
+
+        print("\nCreating {filename}.zip\n".format(filename=filename))
+
+        zip_archive = ZipFile(filename+".zip", "w")
+
+        zipdir(filename, zip_archive)
+
+        zip_archive.close()
+
+        os.chdir(previous_folder)
+
+        if self.config.delete_files:
+            shutil.rmtree(os.path.join(self.filedir, filename))
+
+    def download_pages(self, pages):
+        count = len(pages)
+        current = 1
+        for page in pages:
+            sys.stdout.write("\rPage {cur} of {tot}".format(i, count))
+            sys.stdout.flush()
+
+            descarga = self.download_image(pages[i])
+            if descarga is not None:
+                if (i+1) <= 9:
+                    image = "00" + str(i+1) + ".jpg"
+                elif (i+1) <= 99:
+                    image = "0" + str(i+1) + ".jpg"
                 else:
-                    return 0
-            return 1
-        except:
-            os.chdir(self.directorio)
-    def DownloadImages(self, img):
-		
+                    image = str(i+1) + ".jpg"
+                f = open(image, 'wb')
+                f.write(xor_crypt(descarga, "B"))
+                f.close()
+                i += 1
+            else:
+                return 0
+        return 1
+
+    def download_image(self, img):
         n_try = 1
         while n_try <=9:
             try:
-                descarga = urllib2.urlopen(img).read()
+                descarga = urllib.request.urlopen(img).read()
                 n_try = 10
                 return descarga
-            except (urllib2.URLError,KeyboardInterrupt):
+            except (urllib.error.URLError, KeyboardInterrupt):
                 if n_try < 9:
                     for c in range(31):
                         sys.stdout.write( '\rFailed to download image. Trying again in %d ' %( 30-c ) )
@@ -105,42 +155,41 @@ class MangaDownloader():
                 else:
                     sys.stdout.write('\rError downloading the chapter. Try again later.')
                     sys.stdout.flush()
-                    os.chdir(self.directorio)
+                    os.chdir(self.folder)
                     return None
             n_try += 1
-    def Directorio(self,manga_cover = ""):
-        nopermitido = ["\\","/","?",":","*","\"","<",">","|"]
-        os.chdir(self.directorio)
-        try:
-            self.manga_vol
-        except AttributeError:
-            self.manga_vol = "0"
-        for i in nopermitido:
-            self.manga_titulo = self.manga_titulo.replace(i,"")
-        whi = True
-        while (whi):
+
+    def manga_folder(self, manga_cover =""):
+        invalid_characters = ["\\", "/", "?", ":", "*", "\"", "<", ">", "|"]
+        os.chdir(self.folder)
+
+        for i in invalid_characters:
+            self.manga_title = self.manga_title.replace(i, "")
+        loop = True
+        while loop:
             if self.dir == "default":
                 if os.path.isdir("Manga"):
                     os.chdir("Manga")
                 else:
                     os.mkdir("Manga")
                     os.chdir("Manga")
-                whi = False
+                loop = False
             else:
                 if os.path.isdir(self.dir):
                     os.chdir(self.dir)
-                    whi = False
+                    loop = False
                 else:
-                    print "\n%s doesn't exist. Using dafault folder."%(self.dir)
-                    self.dir = "default"  
-        if os.path.isdir(self.manga_titulo):
-            os.chdir(self.manga_titulo)
+                    print("\n{folder} doesn't exist. Using default folder.".format(folder=self.dir))
+                    self.dir = "default"
+
+        if os.path.isdir(self.manga_title):
+            os.chdir(self.manga_title)
         else:
-            os.mkdir(self.manga_titulo)
-            os.chdir(self.manga_titulo)
+            os.mkdir(self.manga_title)
+            os.chdir(self.manga_title)
         self.filedir = os.getcwd()
     ##
-        self.filevol = self.manga_titulo + " - Vol." + self.manga_vol
+        self.filevol = self.manga_title + " - Vol." + self.manga_vol
         if not self.manga_vol == "0":
             
             if os.path.isdir(self.filevol):
@@ -149,14 +198,14 @@ class MangaDownloader():
                 os.mkdir(self.filevol)
                 os.chdir(self.filevol)
             if not manga_cover == "":
-                descarga = self.DownloadImages(manga_cover)
+                descarga = self.download_image(manga_cover)
                 if descarga is not None:
                     image = "Cover - Vol." + self.manga_vol + ".jpg"
-                    f = open(image,'wb')
-                    f.write(self.xord(descarga, 'B'))
+                    f = open(image, "wb")
+                    f.write(xor_crypt(descarga, "B"))
                     f.close()
     ##
-        self.filename = self.manga_titulo + " - " + self.manga_numcap       
+        self.filename = self.manga_title + " - " + self.manga_numcap
         if self.overwrite and os.path.isdir(self.filename):
             os.chdir(self.filename)
             return True
@@ -167,33 +216,7 @@ class MangaDownloader():
         else:
             return False
 
-
-    def read_config(self):
-        _config = True
-        while (_config):
-            try:
-                with open('config.json') as config_file:
-                    x = json.load(config_file)
-                    self.dir = x["dir"]
-                    self.zip = x["zip"]
-                    self.d_volumes = x["download_volumes"]
-                    self.overwrite = x["overwrite_folders"]
-                    self.delete_files = x["delete_files_after_zip"]
-                    if self.zip == True or self.zip == False: pass
-                    else: self.config()
-                    if self.d_volumes == True or self.d_volumes == False: pass
-                    else: self.config()
-                    if self.overwrite == True or self.overwrite == False: pass
-                    else: self.config()
-                    if self.delete_files == True or self.delete_files == False: pass
-                    else: self.config()
-                    _config = False
-            except (OSError, IOError):
-                self.config()
-            except Exception,e:
-                print "Error: ",e
-                self.config()
-    def mangaurl(self,url):
+    def manga_url(self, url):
         if not url.replace(" ","") == "":
             
             if re.search(r"^(https://)",url):
@@ -202,23 +225,7 @@ class MangaDownloader():
             else:
                 url = "http://"+url
             self.url = url.replace(" ","")
-        
-        
-    def config(self):
-        print "Seens like config.json is broken or doesn't exist. Creating config file..."
-        config = '''
-{
-"dir":"default",
-"zip":false,
-"download_volumes": false,
-"overwrite_folders": false,
-"delete_files_after_zip":false
-}
 
-'''
-        f = open("config.json",'wb')
-        f.write(config)
-        f.close()
     def download(self,url=""):
         if url == "":
             url = self.url
@@ -235,29 +242,29 @@ class MangaDownloader():
         html = self.scraper.get(url).content
         cookies.cookies.save()
         return html
-    #
-    def login(self,usuario,password):
+
+    def login(self, username, password):
         try:
-                with open('cookies.txt'): pass
+            with open('cookies.txt'): pass
         except IOError:
-                cookies = LWPCookieJar('cookies.txt')
-                cookies.save()
+            cookies = LWPCookieJar('cookies.txt')
+            cookies.save()
         url = 'https://www.crunchyroll.com/login'
         cookies = self.scraper
         cookies.cookies = LWPCookieJar('cookies.txt')
         page = self.scraper.get(url).content
         page = BeautifulSoup(page)
-        hidden = page.findAll("input",{u"type":u"hidden"})
+        hidden = page.findAll("input",{"type":"hidden"})
         hidden = hidden[1].get("value")
-        logindata = {'formname' : 'login_form', 'fail_url' : 'http://www.crunchyroll.com/login', 'login_form[name]' : usuario, 'login_form[password]' : password,'login_form[_token]': hidden,'login_form[redirect_url]':'/'}
+        logindata = {'formname' : 'login_form', 'fail_url' : 'http://www.crunchyroll.com/login', 'login_form[name]' : username, 'login_form[password]' : password, 'login_form[_token]': hidden, 'login_form[redirect_url]': '/'}
         req = self.scraper.post(url, data = logindata)
         url = "http://www.crunchyroll.com"
         html = self.scraper.get(url).content
-        if re.search(usuario+'(?i)',html):
-                print 'You have been successfully logged in.\n\n'
+        if re.search(username+ '(?i)', html):
+                print("You have been successfully logged in.\n\n")
                 cookies.cookies.save()
         else:
-                print 'Failed to verify your username and/or password. Please try again.\n\n'
+                print("Failed to verify your username and/or password. Please try again.\n\n")
                 cookies.cookies.save()
 
     def CrunchyManga(self):
@@ -269,14 +276,14 @@ class MangaDownloader():
             url = self.url.split ("[")
             ch_dwn = url[1]
             self.url = url[0]            
-        print "Analyzing link %s..."%self.url
+        print("Analyzing link %s..."%self.url)
         if re.match(r"^(http:\/\/)(w{3}\.)?(crunchyroll\.com\/comics_read(\/(manga|comipo|artistalley))?\?(volume\_id|series\_id)\=[0-9]+&chapter\_num\=[0-9]+(\.[0-9])?)",self.url): #Crunchyroll por episodios.
             try:
                 html= self.download()
                 soup = BeautifulSoup(html)
-                self.manga_titulo = soup.find(u"span", {u"itemprop":u"title"}).text
-                self.manga_titulo = self.manga_titulo.replace(':',' ')
-                manga = soup.find("object",{u"id":u"showmedia_videoplayer_object"}).find("embed",{u"type":u"application/x-shockwave-flash"}).get("flashvars")
+                self.manga_title = soup.find("span", {"itemprop": "title"}).text
+                self.manga_title = self.manga_title.replace(':', ' ')
+                manga = soup.find("object",{"id":"showmedia_videoplayer_object"}).find("embed",{"type":"application/x-shockwave-flash"}).get("flashvars")
                 manga = manga.split("=")
                 n = len(manga)-2
                 serie_id = manga[1][:manga[1].find('&chapterNumber')]
@@ -293,11 +300,11 @@ class MangaDownloader():
                         self.manga_numcap = numero_cap[:-1]
                 else:
                     self.manga_numcap = numero_cap
-                sesion_id = manga[n][:manga[n].find('&config_url')]
-            except Exception,e:
-                print "The link is certainly from Crunchyroll, but it seems that it's not correct. Verify it and try again."
+                section_id = manga[n][:manga[n].find('&config_url')]
+            except Exception as e:
+                print("The link is certainly from Crunchyroll, but it seems that it's not correct. Verify it and try again.")
                 return
-            cr_auth = "http://api-manga.crunchyroll.com/cr_authenticate?auth=&session_id="+sesion_id+"&version=0&format=json"
+            cr_auth = "http://api-manga.crunchyroll.com/cr_authenticate?auth=&session_id="+section_id+"&version=0&format=json"
             html = self.download(cr_auth)
             try:
                 soup = json.loads(html)
@@ -314,12 +321,12 @@ class MangaDownloader():
                 if item["number"] == str(numero_cap):
                     chapter_id = item["chapter_id"]
             if chapter_id == "":
-                print u"\nThe chapter %s is not currently unavailable, try again later.\n"%self.manga_numcap
+                print("\nThe chapter {chapter} is not currently unavailable, try again later.\n".format(chapter=self.manga_numcap))
                 return
             else:
-                url_capitulo = "http://api-manga.crunchyroll.com/list_chapter?session_id="+sesion_id+"&chapter_id="+chapter_id+"&auth="+cr_auth
+                chapter_url = "http://api-manga.crunchyroll.com/list_chapter?session_id="+section_id+"&chapter_id="+chapter_id+"&auth="+cr_auth
                 try:
-                    html= self.download(url_capitulo)
+                    html= self.download(chapter_url)
                     soup = json.loads(html)
                     c=0
                     pages = {}
@@ -329,46 +336,46 @@ class MangaDownloader():
                         except:      
                             pages[c] = item["image_url"]
                         c=c+1
-                except Exception,e:
-                    print "\n\nYou have to be premium user in order to download this chapter. "
+                except Exception as e:
+                    print("\n\nYou have to be premium user in order to download this chapter.")
                     return
-                print u"\nDownloading %s - %s..."%(self.manga_titulo,self.manga_numcap)
-                x = self.Directorio()
+                print("\nDownloading {title} - {num}...".format(title=self.manga_title, num=self.manga_numcap))
+                x = self.folder()
                 if not x:
-                    print "The folder %s - %s already exists and overwrite folders is deactivated."%(self.manga_titulo,self.manga_numcap)
-                    os.chdir(self.directorio)
+                    print("The folder {title} - {num} already exists and overwrite folders is deactivated.".format(title=self.manga_title, num=self.manga_numcap))
+                    os.chdir(self.folder)
                 else:              
-                    descarga = self.downloadPages(pages)
-                    os.chdir(self.directorio)
+                    descarga = self.download_pages(pages)
+                    os.chdir(self.folder)
                     if self.zip and descarga == 1:
-                        self.zipmanga()
+                        self.zip_manga()
         elif re.match(r"^(http:\/\/)(w{3}\.)?(crunchyroll\.com\/comics_read)(\/(manga|comipo|artistalley))?(\?volume\_id\=[0-9]+)$",self.url): #Crunchyroll por volumenes
             volume = re.match(r"^(http:\/\/)(w{3}\.)?(crunchyroll\.com\/comics_read)(\/(?:manga|comipo|artistalley))?(\?volume\_id\=([0-9]+))$",self.url) 
             try:
                 html= self.download()
                 soup = BeautifulSoup(html)
-                manga = soup.find("object",{u"id":u"showmedia_videoplayer_object"}).find("embed",{u"type":u"application/x-shockwave-flash"}).get("flashvars")
+                manga = soup.find("object",{"id":"showmedia_videoplayer_object"}).find("embed",{"type":"application/x-shockwave-flash"}).get("flashvars")
                 manga = manga.split("=")
                 n = len(manga)-2
                 serie_id = manga[1][:manga[1].find('&chapterNumber')]
-                sesion_id = manga[n]
+                section_id = manga[n]
             except:
-                print "The link is certainly from Crunchyroll, but it seems that it's not correct. Verify it and try again."
+                print("The link is certainly from Crunchyroll, but it seems that it's not correct. Verify it and try again.")
                 return
             url_serie = "http://api-manga.crunchyroll.com/chapters?series_id="+serie_id
             html= self.download(url_serie)
             soup = json.loads(html)
-            self.manga_titulo = soup["series"].pop("locale").pop("enUS").pop("name")
-            capitulo = []
+            self.manga_title = soup["series"].pop("locale").pop("enUS").pop("name")
+            chapter = []
             chapter_id = []
             volume = volume.groups()
             volume = volume[5]
             for item in soup["chapters"]:
                 if item.pop("volume_id") == volume:
                     chapter_id.append(item.pop("chapter_id")) 
-                    capitulo.append(item.pop("number"))
+                    chapter.append(item.pop("number"))
                     self.manga_vol = item.pop("volume_number")
-            cr_auth = "http://api-manga.crunchyroll.com/cr_authenticate?auth=&session_id="+sesion_id+"&version=0&format=json"
+            cr_auth = "http://api-manga.crunchyroll.com/cr_authenticate?auth=&session_id="+section_id+"&version=0&format=json"
             html = self.download(cr_auth)
             try:
                 soup = json.loads(html)
@@ -376,28 +383,28 @@ class MangaDownloader():
                 for item in soup["data"]["auth"]:
                     cr_auth=cr_auth+item
             except:
-                print "To download volumes you need a premium account. Standard accounts can only download the latest chapter."
+                print("To download volumes you need a premium account. Standard accounts can only download the latest chapter.")
                 return
             c = 0
             cv = True
             rr = 0
             if self.manga_vol == "0":
-                print "Downloading individual chapters"
-            while c < len(capitulo):
-                x = capitulo[c][-2:]
+                print("Downloading individual chapters")
+            while c < len(chapter):
+                x = chapter[c][-2:]
                 if x == "00":
-                    capitulo[c] = capitulo[c][:-3]
+                    chapter[c] = chapter[c][:-3]
                 else:
-                    capitulo[c] = capitulo[c][:-1]
-                self.manga_numcap = capitulo[c]
+                    chapter[c] = chapter[c][:-1]
+                self.manga_numcap = chapter[c]
                 if self.manga_vol == "0":
-                    print "\n%s: Chapters %d/%d"%(self.manga_titulo,c+1,len(capitulo))
-                    print "\nDownloading %s - %s"%(self.manga_titulo,self.manga_numcap)
+                    print("\n%s: Chapters %d/%d"%(self.manga_title, c + 1, len(chapter)))
+                    print("\nDownloading %s - %s"%(self.manga_title, self.manga_numcap))
                 else:
-                    print "\n%s Vol.%s: Chapters %d/%d"%(self.manga_titulo,self.manga_vol,c+1,len(capitulo))
-                    print "\nDownloading %s Vol.%s ch.%s"%(self.manga_titulo,self.manga_vol,self.manga_numcap)
-                url_capitulo = "http://api-manga.crunchyroll.com/list_chapter?session_id="+sesion_id+"&chapter_id="+chapter_id[c]+"&auth="+cr_auth
-                html= self.download(url_capitulo)
+                    print("\n%s Vol.%s: Chapters %d/%d"%(self.manga_title, self.manga_vol, c + 1, len(chapter)))
+                    print("\nDownloading %s Vol.%s ch.%s"%(self.manga_title, self.manga_vol, self.manga_numcap))
+                chapter_url = "http://api-manga.crunchyroll.com/list_chapter?session_id="+section_id+"&chapter_id="+chapter_id[c]+"&auth="+cr_auth
+                html= self.download(chapter_url)
                 soup = json.loads(html)
                 c2=0
                 pages = {}
@@ -412,23 +419,23 @@ class MangaDownloader():
                     except:      
                         pages[c2] = item["image_url"]
                     c2=c2+1
-                x = self.Directorio(manga_cover)
+                x = self.manga_folder(manga_cover)
                 if not x:
-                    print "The folder %s - %s already exists and overwrite folders is deactivated."%(self.manga_titulo,self.manga_numcap)
-                    os.chdir(self.directorio)
+                    print("The folder %s - %s already exists and overwrite folders is deactivated."%(self.manga_title, self.manga_numcap))
+                    os.chdir(self.folder)
                 else:
-                    descarga = self.downloadPages(pages)
+                    descarga = self.download_pages(pages)
                     if self.manga_vol == "0" and self.zip and descarga == 1:
-                        self.zipmanga()
-                    os.chdir(self.directorio)
+                        self.zip_manga()
+                    os.chdir(self.folder)
                     rr +=1
                 c = c+1
             if self.zip and self.manga_vol != "0" and rr > 0:
-                self.zipmanga() 
+                self.zip_manga()
         elif re.match(r"^(http:\/\/)(w{3}\.)?(crunchyroll\.com\/comics\/(manga|comipo|artistalley)\/[a-z0-9\-]+\/)(volumes)$",self.url): #Crunchyroll por serie entera
             html= self.download(self.url)
             soup = BeautifulSoup(html)
-            serie_id = soup.find(u"span",{u"id":u"sharing_add_queue_button"}).get(u"group_id")
+            serie_id = soup.find("span",{"id":"sharing_add_queue_button"}).get("group_id")
             if ch_dwn is not None:
                 temp = self.d_volumes
                 self.d_volumes = False
@@ -437,42 +444,42 @@ class MangaDownloader():
                 i = 0
                 vol_id = []
                 try:
-                    if soup.find(u"li",{ur"class":u"queue-item volume-simul"}).get(u"volume_id"):                
-                        volumen_id = soup.findAll(u"li",{ur"class":re.compile(u"queue-item volume-")})
+                    if soup.find("li",{r"class":"queue-item volume-simul"}).get("volume_id"):
+                        volumen_id = soup.findAll("li",{r"class":re.compile("queue-item volume-")})
                         while i < len(volumen_id):
                             if i == len(volumen_id)-1:
-                                vol_id.append(volumen_id[0].get(u"volume_id"))
+                                vol_id.append(volumen_id[0].get("volume_id"))
                             else:
-                                vol_id.append(volumen_id[i+1].get(u"volume_id"))
+                                vol_id.append(volumen_id[i+1].get("volume_id"))
                             i+=1
                 except:
-                    volumen_id = soup.findAll(u"li",{ur"class":re.compile(u"queue-item volume-")})
+                    volumen_id = soup.findAll("li",{r"class":re.compile("queue-item volume-")})
                     for vols in volumen_id:
-                        vol_id.append(vols.get(u"volume_id") )
+                        vol_id.append(vols.get("volume_id") )
                 i=0
                 for vols in vol_id:
-                    print "Downloading all volumes and individual chapters available. Volumes: %d/%d"%(i+1,len(vol_id))
+                    print("Downloading all volumes and individual chapters available. Volumes: %d/%d"%(i+1,len(vol_id)))
                     self.url = "http://www.crunchyroll.com/comics_read/manga?volume_id="+vols
                     self.CrunchyManga()
                     i+=1
             else:       
-                volumen_id = soup.find(u"li",{ur"class":re.compile(u"queue-item volume-")}).get(u"volume_id")    
+                volumen_id = soup.find("li",{r"class":re.compile("queue-item volume-")}).get("volume_id")
                 url_vol = "http://www.crunchyroll.com/comics_read/manga?volume_id="+volumen_id
                 html= self.download(url_vol)
                 soup = BeautifulSoup(html)
-                sesion_id = soup.find("object",{u"id":u"showmedia_videoplayer_object"}).find("embed",{u"type":u"application/x-shockwave-flash"}).get("flashvars")
-                sesion_id = sesion_id.split("=")
-                n = len(sesion_id)-2
-                sesion_id = sesion_id[n]
+                section_id = soup.find("object",{"id":"showmedia_videoplayer_object"}).find("embed",{"type":"application/x-shockwave-flash"}).get("flashvars")
+                section_id = section_id.split("=")
+                n = len(section_id)-2
+                section_id = section_id[n]
                 url_serie = "http://api-manga.crunchyroll.com/chapters?series_id="+serie_id
                 html= self.download(url_serie)
                 soup = json.loads(html)
-                self.manga_titulo = soup["series"].pop("locale").pop("enUS").pop("name")
-                capitulo = []
+                self.manga_title = soup["series"].pop("locale").pop("enUS").pop("name")
+                chapter = []
                 chapter_id = []
                 for item in soup["chapters"]:
                     chapter_id.append(item.pop("chapter_id"))
-                    capitulo.append(item.pop("number"))
+                    chapter.append(item.pop("number"))
                 
                 if ch_dwn is not None:
                     ch = []
@@ -487,21 +494,21 @@ class MangaDownloader():
                             if float(x1) > float(x2):
                                 x1 = x[1]
                                 x2 = x[0]
-                            for i2 in capitulo:
+                            for i2 in chapter:
                                 if float(i2) >= float(x1) and float(i2) <= float(x2):
                                     ch.append (i2)
                                     ch_id.append(chapter_id[c])
                                 c+=1
                         else:
-                            for i2 in capitulo:
+                            for i2 in chapter:
                                 if float(i) == float(i2):
                                     ch.append (i2)
                                     ch_id.append(chapter_id[c])
                                 c+=1
                         
-                    capitulo = ch
+                    chapter = ch
                     chapter_id = ch_id
-                cr_auth = "http://api-manga.crunchyroll.com/cr_authenticate?auth=&session_id="+sesion_id+"&version=0&format=json"
+                cr_auth = "http://api-manga.crunchyroll.com/cr_authenticate?auth=&session_id="+section_id+"&version=0&format=json"
                 html = self.download(cr_auth)
                 try:
                     soup = json.loads(html)
@@ -509,19 +516,19 @@ class MangaDownloader():
                     for item in soup["data"]["auth"]:
                         cr_auth=cr_auth+item
                 except:
-                    print "To download complete series you need a premium account. Standard accounts can only download the latest chapter."
+                    print("To download complete series you need a premium account. Standard accounts can only download the latest chapter.")
                     return
                 c = 0
-                while c < len(capitulo):
-                    x = capitulo[c][-2:]
+                while c < len(chapter):
+                    x = chapter[c][-2:]
                     if x == "00":
-                        capitulo[c] = capitulo[c][:-3]
+                        chapter[c] = chapter[c][:-3]
                     else:
-                        capitulo[c] = capitulo[c][:-1]
-                    self.manga_numcap = capitulo[c]
-                    print "\n\n%s chapters %d of %d: Downloading chapter %s"%(self.manga_titulo,c+1,len(capitulo),self.manga_numcap)
-                    url_capitulo = "http://api-manga.crunchyroll.com/list_chapter?session_id="+sesion_id+"&chapter_id="+chapter_id[c]+"&auth="+cr_auth
-                    html= self.download(url_capitulo)
+                        chapter[c] = chapter[c][:-1]
+                    self.manga_numcap = chapter[c]
+                    print("\n\n%s chapters %d of %d: Downloading chapter %s"%(self.manga_title, c + 1, len(chapter), self.manga_numcap))
+                    chapter_url = "http://api-manga.crunchyroll.com/list_chapter?session_id="+section_id+"&chapter_id="+chapter_id[c]+"&auth="+cr_auth
+                    html= self.download(chapter_url)
                     soup = json.loads(html)
                     c2=0
                     pages = {}
@@ -531,116 +538,133 @@ class MangaDownloader():
                         except:      
                             pages[c2] = item["image_url"]
                         c2=c2+1
-                    x = self.Directorio()
+                    x = self.folder()
                     cc = 1
                     if not x:
-                        print "\nThe folder %s - %s already exists and overwrite folders is deactivated."%(self.manga_titulo,self.manga_numcap)
+                        print("\nThe folder %s - %s already exists and overwrite folders is deactivated."%(self.manga_title, self.manga_numcap))
                     else:
-                        descarga = self.downloadPages(pages)
+                        descarga = self.download_pages(pages)
                         cc +=1
-                    os.chdir(self.directorio)
+                    os.chdir(self.folder)
                     if self.zip and cc > 1 and descarga == 1:
-                        self.zipmanga()
+                        self.zip_manga()
                     c = c+1
                 if temp:
                     self.d_volumes = True
         else:
-            print "ERROR: The link is not from Crunchyroll/Manga"
-        os.chdir(self.directorio)
+            print("ERROR: The link is not from Crunchyroll/Manga")
+        os.chdir(self.folder)
     
-    def PaqueteEnlace(self):
+    def MassDownload(self):
         c = 1
         try:
-                with open('links.txt'): pass
+            with open('links.txt'): pass
         except (OSError, IOError):
-                enlaces = open('links.txt','w')
-                enlaces.close()
-                print "The file \"links.txt\" has been created. Please edit it with your links(One per line)."
-                return
-        enlaces = open('links.txt','r')
-        enlaces = enlaces.readlines()
-        n_len = len(enlaces)
+            links_file = open('links.txt','w')
+            links_file.close()
+            print("The file \"links.txt\" has been created. Please edit it with your links(One per line).")
+            return
+
+        links_file = open('links.txt','r')
+        all_links = links_file.readlines()
+
+        n_len = len(all_links)
+
         if n_len > 0:
-            while c <= n_len:
-                print "Loading link %d/%d"%(c,n_len)
-                self.mangaurl( enlaces[c-1].replace("\n","") )
-                print self.url
-                self.CrunchyManga()
+            for link in all_links:
+                print(" *** Loading link {cur}/{tot}".format(cur=c, tot=n_len))
+                link = link.strip("\n")
+                link = link.strip()
+                print("---> {url}".format(url=link))
+                #self.manga_url(link)
+                #self.CrunchyManga()
                 c = c + 1
+
         else:
-            print "The file \"links.txt\" is empty. Please edit it with your links(One per line)."
+            print("The file \"links.txt\" is empty. Please edit it with your links(One per line).")
 
 
     def AllMangas(self):
         html = self.download("http://www.crunchyroll.com/comics/manga/alpha?group=all")
-        soup = BeautifulSoup(html)
-        series = soup.findAll(u"ul",{u"class":u"clearfix medium-margin-bottom"})
-        i = 0
-        serie =[]
-        url_serie = []
+        soup = BeautifulSoup(html, "html.parser")
+        series = soup.findAll("ul",{"class":"clearfix medium-margin-bottom"})
+
+        manga_list = []
+
         for item in series:
             serie2 = item.findAll("li")
             for item2 in serie2:
-                serie.append(item2.find("a").text)
-                url_serie.append("http://www.crunchyroll.com" + item2.find(u"a").get(u"href"))
-        while i < len(url_serie):
-            print "Downloading all mangas from crunchyroll %d/%d\n%s"%(i+1,len(url_serie),serie[i])
-            self.mangaurl(url_serie[i])
-            self.CrunchyManga()
-            i+=1        
+                name = item2.find("a").text
+                name = name.strip("\n")
+                name = name.strip()
+                url = "http://www.crunchyroll.com" + item2.find("a").get("href")
+                manga_list.append({'name':name, 'url':url})
 
-if __name__ == '__main__':    
+        current = 1
+        manga_count = len(manga_list)
+
+        print(manga_list)
+
+        for manga in manga_list:
+            print(" *** Downloading all mangas from crunchyroll {cur}/{tot}\n---> {name}".format(cur=current, tot=manga_count, name=manga['name'], url=manga['url']))
+            #self.manga_url(manga['url'])
+            #self.CrunchyManga()
+            current += 1
+
+
+MangaDL = MangaDownloader()
+
+def download(mangadl, url):
+    mangadl.manga_url(arg.url)
+    mangadl.CrunchyManga()
+
+if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument("-u","--url", type=str,help="Crunchyroll Link. if you get an error, try using double quotation marks (\")")
-    parser.add_argument("-l","--login",nargs = 2, help="Crunchyroll login: -l User password. if your password has a blank, use double quotation marks (\"). Example: \"This is a password.\"")
+    parser.add_argument("-u","--url", type=str, help="Crunchyroll Link. if you get an error, try using double quotation marks (\")")
+    parser.add_argument("-l","--login", nargs=2, help="Crunchyroll login: -l User password. if your password has a blank, use double quotation marks (\"). Example: \"This is a password.\"")
     arg = parser.parse_args()
-    def principal():
-        Manga = MangaDownloader()
-        try:
-            if arg.url:
-                Manga.mangaurl(arg.url)
-                Manga.CrunchyManga()
-            elif arg.login:
-                usuario = arg.login[0]
-                password = arg.login[1]
-                Manga.login(usuario, password)
+
+    if arg.login:
+        username = arg.login[0]
+        password = arg.login[1]
+        MangaDL.login(username, password)
+
+    if arg.url:
+        download(MangaDL, arg.url)
+
+    else:
+        while True:
+            selection = 0
+            print("\nOptions:")
+            print("1.- Download\n2.- Mass Download\n3.- Login \n"
+                  "4.- Download ALL MANGAS from CrunchyRoll \n5.- About \n9.- Exit")
+            try:
+                selection = int(input("> "))
+
+            except:
+                print("ERROR: Invalid selection.")
+
             else:
-                seleccion = 0
-                print "\nOptions:"
-                print "1.- Download\n2.- Download pack\n3.- Login \n4.- Download ALL MANGAS from crunchyroll \n5.- About \n0.- Exit"
-                try:
-                    seleccion = int(input("> "))
-                except:
-                    print "Invalid option"
-                    principal()
-                if seleccion == 1:
-                    Manga.mangaurl(raw_input("Link: "))
-                    Manga.CrunchyManga()
-                    principal()
-                elif seleccion == 2 :
-                    Manga.PaqueteEnlace()
-                    principal()
-                elif seleccion == 3:
-                    usuario = raw_input(u"User: ")
+                if selection == 1:
+                    download(MangaDL, input("Link: "))
+
+                elif selection == 2 :
+                    MangaDL.MassDownload()
+
+                elif selection == 3:
+                    username = input("User: ")
                     password = getpass()
-                    #~ password = raw_input(u"Password: ")
-                    Manga.login(usuario, password)
-                    principal()
-                elif seleccion == 4:
-                    Manga.AllMangas()
-                    principal()
-                elif seleccion == 5:
-                    print about
-                    principal()
-                elif seleccion == 0:
-                    SystemExit()
+                    MangaDL.login(username, password)
+
+                elif selection == 4:
+                    MangaDL.AllMangas()
+
+                elif selection == 5:
+                    print(about)
+
+                elif selection == 9:
+                    exit(0)
+
                 else:
-                    print "ERROR: Invalid option."
-                    principal()
-        except KeyboardInterrupt:
-            principal ()
-        except Exception,e:
-            print "\n",e.message
-            principal()
-            
-    principal()
+                    print("ERROR: Invalid selection.")
+
